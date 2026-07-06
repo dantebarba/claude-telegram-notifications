@@ -1,10 +1,12 @@
 # Claude Code Telegram Notifications
 
-Get notified in Telegram when Claude Code finishes work or needs permission.
+Get notified in Telegram when Claude Code finishes a task or needs your input.
 
 ```
 Claude Code --> hook --> Telegram Bot --> your phone
 ```
+
+> Fork of [mikhailrojo/claude-telegram-notifications](https://github.com/mikhailrojo/claude-telegram-notifications) adding a `Stop`-event notification (task finished) and a `/notifications` toggle command.
 
 ## Installation
 
@@ -17,7 +19,7 @@ Claude Code --> hook --> Telegram Bot --> your phone
 ### 2. Install the plugin
 
 ```
-/plugin marketplace add mikhailrojo/claude-telegram-notifications
+/plugin marketplace add dantebarba/claude-telegram-notifications
 /plugin install telegram-notifications@claude-telegram-notifications
 ```
 
@@ -32,4 +34,18 @@ Claude Code --> hook --> Telegram Bot --> your phone
 }
 ```
 
-Done. Restart Claude Code and notifications will start arriving.
+Restart Claude Code once credentials are set.
+
+## Usage
+
+Notifications are **off by default**. Run:
+
+```
+/notifications
+```
+
+to toggle them on or off. The command reports the new state. State is stored per-machine in `$CLAUDE_CONFIG_DIR/telegram-notifications.enabled` (defaults to `~/.claude/telegram-notifications.enabled`), so the toggle applies across all projects on that machine, not per-project.
+
+When enabled, you'll get a Telegram message:
+- when Claude Code finishes responding (`Stop` event) - useful for auto-mode/background runs
+- when Claude Code is idle waiting for input, or needs permission (`Notification` event)

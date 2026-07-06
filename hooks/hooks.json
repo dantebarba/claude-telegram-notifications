@@ -1,6 +1,17 @@
 {
-  "description": "Telegram notifications for idle and permission prompts",
+  "description": "Telegram notifications for task completion, idle and permission prompts",
   "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/notify.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
     "Notification": [
       {
         "matcher": "idle_prompt|permission_prompt",

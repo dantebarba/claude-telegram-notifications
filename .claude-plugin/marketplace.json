@@ -1,15 +1,15 @@
 {
   "name": "claude-telegram-notifications",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "owner": {
-    "name": "Mikhail Stepanov",
-    "url": "https://github.com/mikhailrojo"
+    "name": "Dante Barba",
+    "url": "https://github.com/dantebarba"
   },
   "plugins": [
     {
       "name": "telegram-notifications",
-      "description": "Telegram notifications when Claude Code is idle or needs permission",
-      "version": "1.0.3",
+      "description": "Telegram notifications when Claude Code finishes a task, is idle, or needs permission - toggle with /notifications",
+      "version": "1.1.0",
       "source": "./"
     }
   ]

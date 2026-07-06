@@ -1,11 +1,11 @@
 {
   "name": "telegram-notifications",
-  "description": "Telegram notifications when Claude Code is idle or needs permission",
-  "version": "1.0.3",
+  "description": "Telegram notifications when Claude Code finishes a task, is idle, or needs permission - toggle with /notifications",
+  "version": "1.1.0",
   "author": {
     "name": "Mikhail Stepanov"
   },
-  "repository": "https://github.com/mikhailrojo/claude-telegram-notifications",
+  "repository": "https://github.com/dantebarba/claude-telegram-notifications",
   "license": "MIT",
   "keywords": ["notifications", "telegram", "hooks"]
 }

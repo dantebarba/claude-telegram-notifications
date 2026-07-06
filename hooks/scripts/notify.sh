@@ -20,12 +20,19 @@ CHAT_ID = os.environ.get("TG_CHAT_ID", "")
 if not BOT_TOKEN or not CHAT_ID:
     sys.exit(0)
 
+STATE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
+STATE_FILE = STATE_DIR / "telegram-notifications.enabled"
+
+if not STATE_FILE.is_file():
+    sys.exit(0)
+
 MAX_CLAUDE_MSG = 1000
 
 hook_input = json.loads(sys.stdin.read())
 
 session_id = hook_input.get("session_id", "unknown")
 cwd = hook_input.get("cwd", "unknown")
+hook_event = hook_input.get("hook_event_name", "")
 notification_type = hook_input.get("notification_type", "unknown")
 message = hook_input.get("message", "")
 transcript_path = hook_input.get("transcript_path", "")
@@ -53,7 +60,11 @@ if transcript_path and Path(transcript_path).is_file():
     except Exception:
         pass
 
-if notification_type == "idle_prompt":
+if hook_event == "Stop":
+    text = f"Claude Code finished\nProject: {project_name}\nSession: {short_session}"
+    if claude_message:
+        text += f"\n\n{claude_message}"
+elif notification_type == "idle_prompt":
     text = f"Claude Code waiting for input\nProject: {project_name}\nSession: {short_session}"
     if claude_message:
         text += f"\n\n{claude_message}"
