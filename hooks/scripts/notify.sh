@@ -31,6 +31,58 @@ MAX_CLAUDE_MSG = 1000
 BACKGROUND_TOOL_NAMES = {"Agent", "Task"}
 PENDING_STATUSES = {"async_launched", "remote_launched", "teammate_spawned"}
 
+MAX_ANCESTOR_HOPS = 8
+
+
+def _ps_field(pid, field):
+    try:
+        result = subprocess.run(
+            ["ps", "-o", f"{field}=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=3,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value or None
+
+
+def find_claude_process_fingerprint(start_pid):
+    """Walk the process ancestry from start_pid looking for the claude CLI
+    process. Captured while the hook runs synchronously (still a descendant
+    of claude), so a later detached flush child can check it's still alive.
+    """
+    pid = start_pid
+    for _ in range(MAX_ANCESTOR_HOPS):
+        ppid_str = _ps_field(pid, "ppid")
+        if not ppid_str:
+            return None
+        try:
+            ppid = int(ppid_str)
+        except ValueError:
+            return None
+        if ppid <= 1:
+            return None
+        comm = _ps_field(ppid, "comm") or ""
+        if "claude" in comm.lower():
+            return {"pid": ppid, "lstart": _ps_field(ppid, "lstart")}
+        pid = ppid
+    return None
+
+
+def claude_process_still_alive(fingerprint):
+    pid = fingerprint.get("pid")
+    if not pid:
+        return None
+    comm = _ps_field(pid, "comm")
+    if not comm or "claude" not in comm.lower():
+        return False
+    expected_lstart = fingerprint.get("lstart")
+    if expected_lstart and _ps_field(pid, "lstart") != expected_lstart:
+        return False
+    return True
+
 
 def read_account_email(state_dir):
     try:
@@ -181,10 +233,10 @@ def cleanup_stale_pending(state_dir, max_age_seconds=86400):
         pass
 
 
-def spawn_flush_child(session_id, generation, auto_seconds):
+def spawn_flush_child(session_id, generation, delay_seconds):
     script_path = str(Path(__file__).resolve())
     subprocess.Popen(
-        [sys.executable, script_path, "--flush", session_id, generation, str(auto_seconds)],
+        [sys.executable, script_path, "--flush", session_id, generation, str(delay_seconds)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -213,8 +265,8 @@ def main_hook():
         if has_pending_background_agents(transcript_path):
             return
 
-    auto_seconds = config.get("auto_seconds")
-    if auto_seconds is not None and session_id and session_id != "unknown":
+    delay_seconds = config.get("delay_seconds")
+    if delay_seconds is not None and session_id and session_id != "unknown":
         generation = uuid.uuid4().hex
         pending = {
             "generation": generation,
@@ -225,16 +277,17 @@ def main_hook():
             "cwd": cwd,
             "transcript_path": transcript_path,
             "session_id": session_id,
+            "claude_fingerprint": find_claude_process_fingerprint(os.getpid()),
         }
         tg_config.atomic_write_json(tg_config.pending_file_path(state_dir, session_id), pending)
-        spawn_flush_child(session_id, generation, auto_seconds)
+        spawn_flush_child(session_id, generation, delay_seconds)
         return
 
     send_notification(hook_event, notification_type, message, cwd, session_id, transcript_path, state_dir)
 
 
-def main_flush(session_id, generation, auto_seconds):
-    time.sleep(auto_seconds)
+def main_flush(session_id, generation, delay_seconds):
+    time.sleep(delay_seconds)
 
     state_dir = tg_config.get_state_dir()
     config = tg_config.load_config(state_dir)
@@ -252,6 +305,10 @@ def main_flush(session_id, generation, auto_seconds):
         return
 
     try:
+        fingerprint = pending.get("claude_fingerprint")
+        if fingerprint and claude_process_still_alive(fingerprint) is False:
+            return
+
         hook_event = pending.get("hook_event", "")
         notification_type = pending.get("notification_type", "unknown")
         message = pending.get("message", "")

@@ -7,7 +7,7 @@ import tg_config
 
 
 def usage_error():
-    print("error: usage: /notifications | /notifications auto <seconds> | /notifications auto off")
+    print("error: usage: /notifications | /notifications delay <seconds> | /notifications delay off")
 
 
 def main(argv):
@@ -20,11 +20,11 @@ def main(argv):
         print("enabled" if config["enabled"] else "disabled")
         return
 
-    if len(argv) == 2 and argv[0] == "auto":
+    if len(argv) == 2 and argv[0] == "delay":
         if argv[1] == "off":
-            config["auto_seconds"] = None
+            config["delay_seconds"] = None
             tg_config.save_config(state_dir, config)
-            print("auto-disabled")
+            print("delay-disabled")
             return
 
         try:
@@ -37,10 +37,10 @@ def main(argv):
             usage_error()
             return
 
-        config["auto_seconds"] = seconds
+        config["delay_seconds"] = seconds
         config["enabled"] = True
         tg_config.save_config(state_dir, config)
-        print(f"auto-enabled:{seconds}")
+        print(f"delay-enabled:{seconds}")
         return
 
     usage_error()

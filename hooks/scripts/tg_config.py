@@ -7,7 +7,7 @@ CONFIG_FILENAME = "telegram-notifications.json"
 LEGACY_ENABLED_FILENAME = "telegram-notifications.enabled"
 PENDING_DIRNAME = "telegram-notifications-pending"
 
-DEFAULT_CONFIG = {"enabled": False, "auto_seconds": None}
+DEFAULT_CONFIG = {"enabled": False, "delay_seconds": None}
 
 
 def get_state_dir():
@@ -53,13 +53,13 @@ def load_config(state_dir):
                 data = json.load(f)
             return {
                 "enabled": bool(data.get("enabled", False)),
-                "auto_seconds": data.get("auto_seconds"),
+                "delay_seconds": data.get("delay_seconds"),
             }
         except Exception:
             return dict(DEFAULT_CONFIG)
 
     if legacy_sentinel_path(state_dir).is_file():
-        return {"enabled": True, "auto_seconds": None}
+        return {"enabled": True, "delay_seconds": None}
 
     return dict(DEFAULT_CONFIG)
 
