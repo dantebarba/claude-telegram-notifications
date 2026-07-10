@@ -65,7 +65,7 @@ By default, notifications send immediately. Delay mode instead starts a timer on
 /notifications delay off   # disable delay mode: back to sending immediately
 ```
 
-Each session has at most one pending timer. Any new qualifying event in that session restarts the timer from zero and replaces the pending notification's content; the previous, now-stale timer is dropped silently when it fires — nothing is sent for it. Different sessions never interfere with each other's timers.
+Each session has at most one pending timer. Any new qualifying event in that session restarts the timer from zero and replaces the pending notification's content; the previous, now-stale timer is dropped silently when it fires — nothing is sent for it. Different sessions never interfere with each other's timers. Submitting a new prompt to Claude also cancels any pending timer for that session outright, since you're already back and engaged.
 
 The timer runs in a detached background process so it survives the hook script exiting, which means it can outlive the `claude` process itself if you close the terminal or kill the session while a notification is still pending. To avoid sending a "finished"/"idle" ping for a session that's already gone, the timer records which `claude` process it belongs to when it starts and re-checks that the process is still running right before sending — if that process has been killed, the pending notification is dropped instead of sent.
 

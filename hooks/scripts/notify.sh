@@ -261,6 +261,16 @@ def main_hook():
     message = hook_input.get("message", "")
     transcript_path = hook_input.get("transcript_path", "")
 
+    if hook_event == "UserPromptSubmit":
+        if session_id and session_id != "unknown":
+            try:
+                tg_config.pending_file_path(state_dir, session_id).unlink()
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
+        return
+
     if hook_event == "Stop" or notification_type == "idle_prompt":
         if has_pending_background_agents(transcript_path):
             return
