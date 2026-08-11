@@ -259,7 +259,7 @@ def record_session(spool_dir, session_id, install, project, cwd):
                 "install_id": install,
                 "project": project,
                 "cwd": str(cwd),
-                "last_notified": time.time(),
+                "last_active": time.time(),
             },
         )
     except Exception:
@@ -267,7 +267,7 @@ def record_session(spool_dir, session_id, install, project, cwd):
 
 
 def load_sessions(spool_dir):
-    """Most recently notified first - `/mute` with no argument means the top one."""
+    """Most recently active first - `/mute` with no argument means the top one."""
     found = []
     try:
         for path in sessions_dir(spool_dir).glob("*.json"):
@@ -280,7 +280,7 @@ def load_sessions(spool_dir):
             found.append(data)
     except Exception:
         pass
-    return sorted(found, key=lambda s: s.get("last_notified", 0), reverse=True)
+    return sorted(found, key=lambda s: s.get("last_active", 0), reverse=True)
 
 
 def plugin_version(script_dir):

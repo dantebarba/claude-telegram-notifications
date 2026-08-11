@@ -209,9 +209,6 @@ def send_notification(hook_event, notification_type, message, cwd, session_id, t
     )
     install = tg_config.install_id(state_dir)
     spool_dir = tg_config.bot_spool_dir(BOT_TOKEN)
-    # Recorded before sending so a command arriving moments later can resolve
-    # "the conversation that just pinged me".
-    tg_config.record_session(spool_dir, session_id, install, project_name, cwd)
 
     reply_markup = None
     if (config or {}).get("buttons", True):
@@ -416,6 +413,17 @@ def main_hook():
     notification_type = hook_input.get("notification_type", "unknown")
     message = hook_input.get("message", "")
     transcript_path = hook_input.get("transcript_path", "")
+
+    # Registered on every event, not just on send: a conversation you have not
+    # been pinged by yet is exactly the one you may want to silence up front,
+    # and with an event type disabled it would otherwise never appear at all.
+    tg_config.record_session(
+        tg_config.bot_spool_dir(BOT_TOKEN),
+        session_id,
+        tg_config.install_id(state_dir),
+        Path(cwd).name,
+        cwd,
+    )
 
     if hook_event == "UserPromptSubmit":
         if session_id and session_id != "unknown":
