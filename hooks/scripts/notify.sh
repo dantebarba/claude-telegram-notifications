@@ -217,20 +217,9 @@ def send_notification(hook_event, notification_type, message, cwd, session_id, t
     send_telegram_message(BOT_TOKEN, CHAT_ID, text, SSL_CONTEXT)
 
 
-def cleanup_stale_pending(state_dir, max_age_seconds=86400):
-    try:
-        pdir = tg_config.pending_dir(state_dir)
-        if not pdir.is_dir():
-            return
-        now = time.time()
-        for f in pdir.glob("*.json"):
-            try:
-                if now - f.stat().st_mtime > max_age_seconds:
-                    f.unlink()
-            except OSError:
-                pass
-    except Exception:
-        pass
+def cleanup_stale_state(state_dir, max_age_seconds=86400):
+    tg_config.cleanup_stale_dir(tg_config.pending_dir(state_dir), max_age_seconds)
+    tg_config.cleanup_stale_dir(tg_config.muted_dir(state_dir), max_age_seconds)
 
 
 def spawn_flush_child(session_id, generation, delay_seconds):
@@ -246,7 +235,7 @@ def spawn_flush_child(session_id, generation, delay_seconds):
 
 def main_hook():
     state_dir = tg_config.get_state_dir()
-    cleanup_stale_pending(state_dir)
+    cleanup_stale_state(state_dir)
 
     config = tg_config.load_config(state_dir)
     if not config.get("enabled"):
@@ -269,6 +258,13 @@ def main_hook():
                 pass
             except Exception:
                 pass
+        return
+
+    event_type = tg_config.classify_event(hook_event, notification_type)
+    if not tg_config.event_enabled(config, event_type):
+        return
+
+    if tg_config.is_session_muted(state_dir, session_id):
         return
 
     if hook_event == "Stop" or notification_type == "idle_prompt":
@@ -324,6 +320,13 @@ def main_flush(session_id, generation, delay_seconds):
         message = pending.get("message", "")
         cwd = pending.get("cwd", "unknown")
         transcript_path = pending.get("transcript_path", "")
+
+        event_type = tg_config.classify_event(hook_event, notification_type)
+        if not tg_config.event_enabled(config, event_type):
+            return
+
+        if tg_config.is_session_muted(state_dir, session_id):
+            return
 
         if hook_event == "Stop" or notification_type == "idle_prompt":
             if has_pending_background_agents(transcript_path):

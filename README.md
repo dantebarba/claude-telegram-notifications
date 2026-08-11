@@ -44,17 +44,47 @@ Notifications are **off by default**. Run:
 /notifications
 ```
 
-to toggle them on or off. The command reports the new state. State is stored per-machine in `$CLAUDE_CONFIG_DIR/telegram-notifications.json` (defaults to `~/.claude/telegram-notifications.json`), so the toggle applies across all projects on that machine, not per-project.
+to toggle them on or off, or `/notifications on` / `/notifications off` to set the state explicitly. `/notifications status` prints everything at once. State is stored per-machine in `$CLAUDE_CONFIG_DIR/telegram-notifications.json` (defaults to `~/.claude/telegram-notifications.json`), so it applies across all projects on that machine, not per-project.
 
 ```json
-{"enabled": true, "delay_seconds": null}
+{
+  "enabled": true,
+  "delay_seconds": null,
+  "events": {"permission": true, "idle": true, "finish": true}
+}
 ```
 
-If you're upgrading from an older version of this plugin, the legacy `telegram-notifications.enabled` sentinel file is read automatically as a fallback (treated as enabled, delay mode off) until the next time you run `/notifications`, at which point it's migrated to the JSON file above and removed.
+If you're upgrading from an older version of this plugin, the legacy `telegram-notifications.enabled` sentinel file is read automatically as a fallback (treated as enabled, delay mode off) until the next time you run `/notifications`, at which point it's migrated to the JSON file above and removed. A config file written before per-event toggles existed keeps notifying on everything: a missing `events` key means all three types are on.
 
 When enabled, you'll get a Telegram message:
 - when Claude Code finishes responding (`Stop` event) - useful for delayed/background runs
 - when Claude Code is idle waiting for input, or needs permission (`Notification` event)
+
+### Choosing which events notify
+
+Each of the three event types can be turned off on its own, so you can keep the ones you care about and drop the noisy ones:
+
+| Type | Fires when |
+|---|---|
+| `permission` | Claude needs you to approve a tool call |
+| `idle` | Claude is waiting for input |
+| `finish` | Claude finished responding (`Stop`) |
+
+```
+/notifications off finish       # stop pinging on every completed turn
+/notifications on permission    # keep approval prompts
+```
+
+Turning a type on also turns the global switch on, since otherwise it would have no effect. The global switch wins over the per-type flags, which in turn win over a per-conversation mute.
+
+### Muting a single conversation
+
+```
+/notifications mute      # silence this conversation only
+/notifications unmute    # bring it back
+```
+
+Mute is scoped to the current session id, leaves your global settings untouched, and also drops any notification already waiting out the delay for that session. Mute state lives in `$CLAUDE_CONFIG_DIR/telegram-notifications-muted/`, one file per session, cleaned up automatically after 24 hours — a session running longer than that unmutes itself.
 
 ### Delay mode (debounced notifications)
 
