@@ -1,5 +1,7 @@
+import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -9,13 +11,20 @@ LEGACY_ENABLED_FILENAME = "telegram-notifications.enabled"
 PENDING_DIRNAME = "telegram-notifications-pending"
 MUTED_DIRNAME = "telegram-notifications-muted"
 
+# Shared by every install that talks to the same bot, so it cannot live under
+# CLAUDE_CONFIG_DIR: getUpdates offsets are global to a bot token.
+SPOOL_DIRNAME = ".claude-telegram-notifications"
+
 EVENT_TYPES = ("permission", "idle", "finish")
 
 DEFAULT_CONFIG = {
     "enabled": False,
     "delay_seconds": None,
+    "buttons": True,
     "events": {event_type: True for event_type in EVENT_TYPES},
 }
+
+SESSION_ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 
 
 def get_state_dir():
@@ -82,13 +91,19 @@ def load_config(state_dir):
             return {
                 "enabled": bool(data.get("enabled", False)),
                 "delay_seconds": data.get("delay_seconds"),
+                "buttons": bool(data.get("buttons", True)),
                 "events": normalize_events(data.get("events")),
             }
         except Exception:
             return {**DEFAULT_CONFIG, "events": default_events()}
 
     if legacy_sentinel_path(state_dir).is_file():
-        return {"enabled": True, "delay_seconds": None, "events": default_events()}
+        return {
+            "enabled": True,
+            "delay_seconds": None,
+            "buttons": True,
+            "events": default_events(),
+        }
 
     return {**DEFAULT_CONFIG, "events": default_events()}
 
@@ -121,18 +136,31 @@ def event_enabled(config, event_type):
     return normalize_events(config.get("events")).get(event_type, True)
 
 
-def is_session_muted(state_dir, session_id):
+def valid_session_id(session_id):
+    """Session ids become filenames, and since the button callbacks arrive over
+    the network they cannot be trusted the way hook stdin can."""
     if not session_id or session_id == "unknown":
+        return False
+    return bool(SESSION_ID_RE.match(session_id))
+
+
+def is_session_muted(state_dir, session_id):
+    if not valid_session_id(session_id):
         return False
     return muted_file_path(state_dir, session_id).is_file()
 
 
 def mute_session(state_dir, session_id):
+    if not valid_session_id(session_id):
+        return False
     atomic_write_json(muted_file_path(state_dir, session_id), {"muted_at": time.time()})
+    return True
 
 
 def unmute_session(state_dir, session_id):
     """Returns True when a mute was actually lifted."""
+    if not valid_session_id(session_id):
+        return False
     try:
         muted_file_path(state_dir, session_id).unlink()
         return True
@@ -140,6 +168,45 @@ def unmute_session(state_dir, session_id):
         return False
     except Exception:
         return False
+
+
+def install_id(state_dir):
+    """Stable short id for this install, so a poller can route a button tap to
+    the config dir whose notification carried the button."""
+    return hashlib.sha256(str(Path(state_dir)).encode()).hexdigest()[:8]
+
+
+def bot_spool_dir(bot_token):
+    digest = hashlib.sha256(bot_token.encode()).hexdigest()[:12]
+    return Path.home() / SPOOL_DIRNAME / digest
+
+
+def cursor_path(spool_dir):
+    return spool_dir / "cursor.json"
+
+
+def lock_path(spool_dir):
+    return spool_dir / "poll.lock"
+
+
+def inbox_dir(spool_dir, install):
+    return spool_dir / "inbox" / install
+
+
+def load_cursor(spool_dir):
+    try:
+        with open(cursor_path(spool_dir), "r") as f:
+            data = json.load(f)
+        return {
+            "offset": int(data.get("offset", 0)),
+            "last_poll": float(data.get("last_poll", 0)),
+        }
+    except Exception:
+        return {"offset": 0, "last_poll": 0.0}
+
+
+def save_cursor(spool_dir, offset, last_poll):
+    atomic_write_json(cursor_path(spool_dir), {"offset": offset, "last_poll": last_poll})
 
 
 def cleanup_stale_dir(dir_path, max_age_seconds=86400):

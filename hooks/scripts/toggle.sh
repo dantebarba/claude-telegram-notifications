@@ -8,8 +8,8 @@ import tg_config
 
 USAGE = (
     "error: usage: /notifications [on|off] | /notifications on|off <permission|idle|finish> | "
-    "/notifications delay <seconds> | /notifications delay off | /notifications mute | "
-    "/notifications unmute | /notifications status"
+    "/notifications delay <seconds> | /notifications delay off | /notifications buttons on|off | "
+    "/notifications mute | /notifications unmute | /notifications status"
 )
 
 
@@ -44,6 +44,7 @@ def print_status(state_dir, config):
         f"{event_type}={'on' if events[event_type] else 'off'}"
         for event_type in tg_config.EVENT_TYPES
     ))
+    print(f"buttons: {'on' if config.get('buttons', True) else 'off'}")
     print(f"session: {session_line}")
 
 
@@ -116,6 +117,12 @@ def main(argv):
 
     if len(argv) == 2 and argv[0] in ("on", "off"):
         set_event(state_dir, config, argv[1], argv[0] == "on")
+        return
+
+    if len(argv) == 2 and argv[0] == "buttons" and argv[1] in ("on", "off"):
+        config["buttons"] = argv[1] == "on"
+        tg_config.save_config(state_dir, config)
+        print(f"buttons-{'enabled' if config['buttons'] else 'disabled'}")
         return
 
     if len(argv) == 2 and argv[0] == "delay":

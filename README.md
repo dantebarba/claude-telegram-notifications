@@ -50,6 +50,7 @@ to toggle them on or off, or `/notifications on` / `/notifications off` to set t
 {
   "enabled": true,
   "delay_seconds": null,
+  "buttons": true,
   "events": {"permission": true, "idle": true, "finish": true}
 }
 ```
@@ -85,6 +86,31 @@ Turning a type on also turns the global switch on, since otherwise it would have
 ```
 
 Mute is scoped to the current session id, leaves your global settings untouched, and also drops any notification already waiting out the delay for that session. Mute state lives in `$CLAUDE_CONFIG_DIR/telegram-notifications-muted/`, one file per session, cleaned up automatically after 24 hours — a session running longer than that unmutes itself.
+
+### Muting from Telegram
+
+Each notification carries two inline buttons, so you don't have to go back to the machine:
+
+```
+Claude Code finished
+Project: my-app
+Session: a1b2c3d4
+
+[ 🔕 Mute ]  [ 📊 Status ]
+```
+
+Tapping **Mute** silences that conversation and edits the button into **Unmute**, so the same message can undo it. Tapping **Status** shows your current settings in a popup — nothing is added to the chat.
+
+```
+/notifications buttons off   # send plain notifications with no buttons
+/notifications buttons on
+```
+
+**How taps get picked up.** The plugin has no daemon: it polls Telegram opportunistically from the hooks it already runs. A poll happens right before any notification is sent (so a Mute you just tapped is honoured before the next ping goes out), inside the delay-mode timer, and from a detached child that chases each notification at +5s, +15s and +45s — which covers the usual case of tapping a button seconds after it arrives. Submitting a prompt never waits on the network.
+
+The consequence is that a tap made while nothing is happening in that session sits unprocessed until the next event. The action still applies when it's picked up, but Telegram only accepts a popup response for a few seconds after the tap, so a late-processed **Mute** confirms itself by flipping the button rather than by a popup, and a late **Status** falls back to posting a message.
+
+If you run more than one Claude install against the same bot (say `~/.claude` and a second `CLAUDE_CONFIG_DIR`), they coordinate: Telegram hands out each update exactly once, so one shared spool at `~/.claude-telegram-notifications/<bot>/` holds a poll lock and a cursor, and whichever install polls routes each tap to the install that sent that notification. Callbacks from any chat other than your `TG_CHAT_ID` are discarded.
 
 ### Delay mode (debounced notifications)
 
