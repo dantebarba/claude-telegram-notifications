@@ -106,11 +106,58 @@ Tapping **Mute** silences that conversation and edits the button into **Unmute**
 /notifications buttons on
 ```
 
-**How taps get picked up.** The plugin has no daemon: it polls Telegram opportunistically from the hooks it already runs. A poll happens right before any notification is sent (so a Mute you just tapped is honoured before the next ping goes out), inside the delay-mode timer, and from a detached child that chases each notification at +5s, +15s and +45s — which covers the usual case of tapping a button seconds after it arrives. Submitting a prompt never waits on the network.
+**How taps get picked up.** Without the daemon (below), the plugin polls Telegram opportunistically from the hooks it already runs: right before any notification is sent, inside the delay-mode timer, and from a detached child chasing each notification at +5s, +15s and +45s. Submitting a prompt never waits on the network.
 
-The consequence is that a tap made while nothing is happening in that session sits unprocessed until the next event. The action still applies when it's picked up, but Telegram only accepts a popup response for a few seconds after the tap, so a late-processed **Mute** confirms itself by flipping the button rather than by a popup, and a late **Status** falls back to posting a message.
+That works, but a tap made while nothing is happening in that session sits unprocessed until the next event. The action still applies when it's picked up, but Telegram only accepts a popup response for a few seconds after a tap, so a late-processed **Mute** confirms itself by flipping the button rather than by a popup, and a late **Status** falls back to posting a message. Installing the daemon removes this entirely.
 
 If you run more than one Claude install against the same bot (say `~/.claude` and a second `CLAUDE_CONFIG_DIR`), they coordinate: Telegram hands out each update exactly once, so one shared spool at `~/.claude-telegram-notifications/<bot>/` holds a poll lock and a cursor, and whichever install polls routes each tap to the install that sent that notification. Callbacks from any chat other than your `TG_CHAT_ID` are discarded.
+
+## Controlling everything from Telegram
+
+Install the background daemon and the bot gains a command palette, answering taps and commands in under a second:
+
+```
+/notifications daemon install     # also registers /status, /mute, /unmute with the bot
+/notifications daemon status
+/notifications daemon log
+/notifications daemon restart
+/notifications daemon uninstall   # also clears the palette
+```
+
+It runs under launchd (`com.claude-telegram-notifications.daemon`), restarts if it crashes, and logs to `~/.claude-telegram-notifications/<bot>/daemon.log`. Credentials come from the `env` block of the `settings.json` in the config dir you installed from — the same file the hooks use, so the token is never copied anywhere else.
+
+### The /status panel
+
+`/status` in Telegram replies with a live control panel per install:
+
+```
+Claude notifications — .claude-personal
+global: on    delay: 15s
+last session: a1b2c3d4 (my-app)
+
+[ ✅ finish ] [ ✅ idle ] [ ✅ permission ]
+[ 🔕 Mute last session ]
+[ ⏸ Disable all ]
+```
+
+Every button edits the message in place, so the panel always shows current truth. Tapping an event type turns that notification kind on or off exactly like `/notifications off finish` would on the machine.
+
+### Typed commands
+
+```
+/mute              silence the conversation that pinged you most recently
+/mute a1b2c3d4     silence that one, by the short id shown in every notification
+/unmute [id]
+/status            the panel above
+```
+
+An ambiguous id prefix lists the candidates rather than guessing.
+
+### Notes
+
+The daemon holds the shared poll lock while long-polling, so the hooks' own polling stands down on its own. If the daemon dies, they resume on the next event — degraded, but nothing breaks. A plugin upgrade is noticed by the next hook, which reinstalls and restarts the daemon so it never keeps running old code.
+
+Only one daemon runs per bot no matter how many installs you have, and it serves all of them: each install records where its config lives in the shared spool.
 
 ### Delay mode (debounced notifications)
 

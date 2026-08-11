@@ -43,11 +43,22 @@ def send_message(bot_token, chat_id, text, reply_markup=None, timeout=DEFAULT_TI
     return call(bot_token, "sendMessage", payload, timeout)
 
 
-def get_updates(bot_token, offset, timeout=DEFAULT_TIMEOUT, limit=100):
+DEFAULT_UPDATE_TYPES = ["callback_query", "message"]
+
+
+def get_updates(bot_token, offset, timeout=DEFAULT_TIMEOUT, limit=100, long_poll=0,
+                allowed_updates=None):
+    """`long_poll` is the server-side wait in seconds; the daemon holds the
+    request open with it, while hook-driven polls pass 0 and return at once."""
     return call(
         bot_token,
         "getUpdates",
-        {"offset": offset, "limit": limit, "timeout": 0, "allowed_updates": ["callback_query"]},
+        {
+            "offset": offset,
+            "limit": limit,
+            "timeout": long_poll,
+            "allowed_updates": allowed_updates or DEFAULT_UPDATE_TYPES,
+        },
         timeout,
     )
 
@@ -70,3 +81,19 @@ def edit_message_reply_markup(bot_token, chat_id, message_id, reply_markup,
         {"chat_id": chat_id, "message_id": message_id, "reply_markup": reply_markup},
         timeout,
     )
+
+
+def edit_message_text(bot_token, chat_id, message_id, text, reply_markup=None,
+                      timeout=DEFAULT_TIMEOUT):
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    return call(bot_token, "editMessageText", payload, timeout)
+
+
+def set_my_commands(bot_token, commands, timeout=DEFAULT_TIMEOUT):
+    return call(bot_token, "setMyCommands", {"commands": commands}, timeout)
+
+
+def delete_my_commands(bot_token, timeout=DEFAULT_TIMEOUT):
+    return call(bot_token, "deleteMyCommands", {}, timeout)

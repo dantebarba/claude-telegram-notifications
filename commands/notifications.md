@@ -11,6 +11,10 @@ Run `${CLAUDE_PLUGIN_ROOT}/hooks/scripts/toggle.sh $ARGUMENTS` via Bash. Based o
 - `delay-disabled` -> "Delay mode disabled: notifications will be sent immediately again."
 - `buttons-enabled` -> "Mute/Status buttons enabled on notifications."
 - `buttons-disabled` -> "Mute/Status buttons disabled."
+- `daemon-installed:<version>` -> "Telegram daemon installed and running (v<version>)."
+- `daemon-uninstalled` -> "Telegram daemon removed and the bot command palette cleared."
+- `daemon-restarted` -> "Telegram daemon restarted."
+- `daemon-status` -> relay the remaining lines as-is.
 - `muted` -> "Notifications muted for this conversation."
 - `unmuted` -> "Notifications unmuted for this conversation."
 - `status` -> relay the remaining lines as-is, without rewording them.

@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tg_api
 import tg_config
+import tg_handlers
 
 BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 CHAT_ID = os.environ.get("TG_CHAT_ID", "")
@@ -29,13 +30,10 @@ MAX_ANCESTOR_HOPS = 8
 # get 15s, so 2s of network is affordable and a tap lands before the next ping.
 POLL_TIMEOUT = 2
 MIN_POLL_INTERVAL = 3
-# A tap almost always happens seconds after the ping arrives, so chase the
-# notification with a detached child instead of waiting for the next hook.
+# Without the daemon, a tap almost always happens seconds after the ping
+# arrives, so chase the notification with a detached child rather than waiting
+# for the next hook.
 POST_SEND_POLL_DELAYS = (5, 15, 45)
-
-ACTION_MUTE = "m"
-ACTION_UNMUTE = "u"
-ACTION_STATUS = "s"
 
 
 def _ps_field(pid, field):
@@ -197,58 +195,8 @@ def build_notification_text(hook_event, notification_type, message, project_name
     return text
 
 
-def callback_data(action, state_dir, session_id):
-    """`<action>:<install>:<session>` - 47 bytes for a UUID session id, inside
-    Telegram's 64-byte cap. The install id is what lets a shared bot route a
-    tap back to the config dir that sent the notification."""
-    return f"{action}:{tg_config.install_id(state_dir)}:{session_id}"
-
-
-def parse_callback_data(raw):
-    parts = (raw or "").split(":")
-    if len(parts) != 3:
-        return None
-    action, install, session_id = parts
-    if action not in (ACTION_MUTE, ACTION_UNMUTE, ACTION_STATUS):
-        return None
-    if not tg_config.valid_session_id(session_id):
-        return None
-    return {"action": action, "install": install, "session_id": session_id}
-
-
-def build_reply_markup(state_dir, session_id, muted):
-    if not tg_config.valid_session_id(session_id):
-        return None
-    if muted:
-        toggle_button = {
-            "text": "🔔 Unmute",
-            "callback_data": callback_data(ACTION_UNMUTE, state_dir, session_id),
-        }
-    else:
-        toggle_button = {
-            "text": "🔕 Mute",
-            "callback_data": callback_data(ACTION_MUTE, state_dir, session_id),
-        }
-    status_button = {
-        "text": "📊 Status",
-        "callback_data": callback_data(ACTION_STATUS, state_dir, session_id),
-    }
-    return {"inline_keyboard": [[toggle_button, status_button]]}
-
-
-def build_status_text(state_dir, config, session_id):
-    events = tg_config.normalize_events(config.get("events"))
-    delay = config.get("delay_seconds")
-    lines = [
-        f"global: {'on' if config.get('enabled') else 'off'}",
-        f"delay: {f'{delay}s' if delay else 'off (immediate)'}",
-        " ".join(
-            f"{event_type}={'on' if events[event_type] else 'off'}"
-            for event_type in tg_config.EVENT_TYPES
-        ),
-        f"this session: {'muted' if tg_config.is_session_muted(state_dir, session_id) else 'active'}",
-    ]
-    return "\n".join(lines)
+def context(state_dir):
+    return tg_handlers.Context(BOT_TOKEN, CHAT_ID, local_state_dir=state_dir)
 
 
 def send_notification(hook_event, notification_type, message, cwd, session_id, transcript_path, state_dir, config=None):
@@ -259,11 +207,19 @@ def send_notification(hook_event, notification_type, message, cwd, session_id, t
     text = build_notification_text(
         hook_event, notification_type, message, project_name, short_session, account_email, claude_message
     )
+    install = tg_config.install_id(state_dir)
+    spool_dir = tg_config.bot_spool_dir(BOT_TOKEN)
+    # Recorded before sending so a command arriving moments later can resolve
+    # "the conversation that just pinged me".
+    tg_config.record_session(spool_dir, session_id, install, project_name, cwd)
+
     reply_markup = None
     if (config or {}).get("buttons", True):
-        reply_markup = build_reply_markup(state_dir, session_id, False)
+        reply_markup = tg_handlers.notification_markup(install, session_id, False)
     tg_api.send_message(BOT_TOKEN, CHAT_ID, text, reply_markup)
-    if reply_markup:
+    if reply_markup and not daemon_is_running(spool_dir):
+        # With the daemon up, taps arrive within a second and chasing the
+        # notification would just duplicate its work.
         spawn_poll_child()
 
 
@@ -274,6 +230,20 @@ def cleanup_stale_state(state_dir, max_age_seconds=86400):
     tg_config.cleanup_stale_dir(
         tg_config.inbox_dir(spool_dir, tg_config.install_id(state_dir)), max_age_seconds
     )
+    tg_config.cleanup_stale_dir(tg_config.sessions_dir(spool_dir), max_age_seconds)
+    tg_config.cleanup_stale_dir(tg_config.installs_dir(spool_dir), 30 * max_age_seconds)
+
+
+def heal_daemon_if_stale(state_dir):
+    """A plugin upgrade swaps the cache directory out from under the daemon, so
+    whoever notices the version drift reinstalls it - detached, never blocking
+    the hook."""
+    try:
+        import tg_service
+        if tg_service.needs_reinstall(state_dir, Path(__file__).resolve().parent):
+            spawn_detached("--heal")
+    except Exception:
+        pass
 
 
 def spawn_detached(*args):
@@ -295,13 +265,35 @@ def spawn_poll_child():
     spawn_detached("--poll")
 
 
+def daemon_is_running(spool_dir):
+    """The daemon holds its lock for its whole life, so failing to take it is
+    proof it is alive - no pidfile to go stale."""
+    try:
+        probe = open(tg_config.daemon_lock_path(spool_dir), "a")
+    except Exception:
+        return False
+    try:
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(probe, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+    finally:
+        try:
+            probe.close()
+        except Exception:
+            pass
+
+
 def poll_once(state_dir):
-    """Drain new callback queries into per-install inboxes.
+    """Drain new updates: callbacks into per-install inboxes, typed commands
+    handled on the spot.
 
     Only one process polls at a time: getUpdates offsets are global to the bot
     token, so two installs sharing a bot would otherwise consume each other's
-    updates. Routing happens here rather than at drain time, which is why an
-    install can never starve its sibling.
+    updates. Callback routing happens here rather than at drain time, which is
+    why an install can never starve its sibling. When the daemon is up it holds
+    this lock through every long poll, so this quietly does nothing.
     """
     spool_dir = tg_config.bot_spool_dir(BOT_TOKEN)
     try:
@@ -314,7 +306,7 @@ def poll_once(state_dir):
         try:
             fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            return  # another process is already polling
+            return  # another process (or the daemon) is already polling
 
         cursor = tg_config.load_cursor(spool_dir)
         now = time.time()
@@ -326,6 +318,7 @@ def poll_once(state_dir):
             tg_config.save_cursor(spool_dir, cursor["offset"], now)
             return
 
+        ctx = context(state_dir)
         offset = cursor["offset"]
         for update in updates:
             try:
@@ -334,12 +327,25 @@ def poll_once(state_dir):
                 continue
             offset = max(offset, update_id)
 
+            message = update.get("message")
+            if message:
+                # A typed command names no install, and the handler resolves
+                # its target from the session registry, so whoever polls can
+                # serve it directly.
+                chat = message.get("chat") or {}
+                if str(chat.get("id", "")) == str(CHAT_ID):
+                    try:
+                        tg_handlers.handle_message(ctx, message)
+                    except Exception:
+                        pass
+                continue
+
             callback = update.get("callback_query") or {}
             chat = (callback.get("message") or {}).get("chat") or {}
             if str(chat.get("id", "")) != str(CHAT_ID):
                 continue  # not our chat - never act on it
 
-            parsed = parse_callback_data(callback.get("data"))
+            parsed = tg_handlers.parse_callback_data(callback.get("data"))
             if not parsed:
                 continue
 
@@ -359,52 +365,12 @@ def poll_once(state_dir):
             pass
 
 
-def handle_callback(state_dir, config, entry):
-    parsed = entry.get("parsed") or {}
-    callback = entry.get("callback") or {}
-    action = parsed.get("action")
-    session_id = parsed.get("session_id")
-    query_id = callback.get("id")
-    message = callback.get("message") or {}
-    chat_id = (message.get("chat") or {}).get("id")
-    message_id = message.get("message_id")
-
-    if action == ACTION_STATUS:
-        text = build_status_text(state_dir, config, session_id)
-        answered = tg_api.answer_callback_query(BOT_TOKEN, query_id, text, show_alert=True)
-        if not answered:
-            # The query expired before we got to it; a plain message is the
-            # only way the status still reaches the phone.
-            tg_api.send_message(BOT_TOKEN, CHAT_ID, text)
-        return
-
-    if action == ACTION_MUTE:
-        tg_config.mute_session(state_dir, session_id)
-        try:
-            tg_config.pending_file_path(state_dir, session_id).unlink()
-        except FileNotFoundError:
-            pass
-        except Exception:
-            pass
-        toast = "🔕 Muted this conversation"
-    else:
-        tg_config.unmute_session(state_dir, session_id)
-        toast = "🔔 Unmuted this conversation"
-
-    tg_api.answer_callback_query(BOT_TOKEN, query_id, toast)
-    # Editing the markup works at any age, so the flipped button - not the
-    # toast - is what durably confirms the tap.
-    if chat_id is not None and message_id is not None:
-        markup = build_reply_markup(state_dir, session_id, action == ACTION_MUTE)
-        if markup:
-            tg_api.edit_message_reply_markup(BOT_TOKEN, chat_id, message_id, markup)
-
-
 def drain_inbox(state_dir, config):
     spool_dir = tg_config.bot_spool_dir(BOT_TOKEN)
     box = tg_config.inbox_dir(spool_dir, tg_config.install_id(state_dir))
     if not box.is_dir():
         return
+    ctx = context(state_dir)
     for path in sorted(box.glob("*.json")):
         try:
             with open(path, "r") as f:
@@ -415,9 +381,9 @@ def drain_inbox(state_dir, config):
             path.unlink()
         except Exception:
             pass
-        if entry:
+        if entry and entry.get("callback"):
             try:
-                handle_callback(state_dir, config, entry)
+                tg_handlers.handle_callback(ctx, entry["callback"])
             except Exception:
                 pass
 
@@ -434,6 +400,9 @@ def sync_callbacks(state_dir, config):
 def main_hook():
     state_dir = tg_config.get_state_dir()
     cleanup_stale_state(state_dir)
+    # Lets the daemon act on this install even though it was started by another.
+    tg_config.record_install(tg_config.bot_spool_dir(BOT_TOKEN), tg_config.install_id(state_dir), state_dir)
+    heal_daemon_if_stale(state_dir)
 
     config = tg_config.load_config(state_dir)
     if not config.get("enabled"):
@@ -562,10 +531,20 @@ def main_poll():
         drain_inbox(state_dir, config)
 
 
+def main_heal():
+    import tg_service
+    state_dir = tg_config.get_state_dir()
+    script_dir = Path(__file__).resolve().parent
+    if tg_service.needs_reinstall(state_dir, script_dir):
+        tg_service.install(tg_service.marker(state_dir).get("state_dir", str(state_dir)), script_dir)
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--flush":
         main_flush(sys.argv[2], sys.argv[3], int(sys.argv[4]))
     elif len(sys.argv) > 1 and sys.argv[1] == "--poll":
         main_poll()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--heal":
+        main_heal()
     else:
         main_hook()

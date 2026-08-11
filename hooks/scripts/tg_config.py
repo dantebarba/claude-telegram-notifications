@@ -189,8 +189,106 @@ def lock_path(spool_dir):
     return spool_dir / "poll.lock"
 
 
+def daemon_lock_path(spool_dir):
+    return spool_dir / "daemon.lock"
+
+
+def daemon_marker_path(spool_dir):
+    return spool_dir / "daemon.json"
+
+
+def daemon_log_path(spool_dir):
+    return spool_dir / "daemon.log"
+
+
+def bin_dir(spool_dir, version):
+    return spool_dir / "bin" / version
+
+
 def inbox_dir(spool_dir, install):
     return spool_dir / "inbox" / install
+
+
+def installs_dir(spool_dir):
+    return spool_dir / "installs"
+
+
+def sessions_dir(spool_dir):
+    return spool_dir / "sessions"
+
+
+def record_install(spool_dir, install, state_dir, refresh_after=3600):
+    """Lets the daemon act on any install's state, not just the one that
+    started it. Rewritten only when stale, so it is not a per-hook write."""
+    path = installs_dir(spool_dir) / f"{install}.json"
+    try:
+        if path.is_file() and time.time() - path.stat().st_mtime < refresh_after:
+            return
+    except OSError:
+        pass
+    try:
+        atomic_write_json(path, {"state_dir": str(state_dir), "last_seen": time.time()})
+    except Exception:
+        pass
+
+
+def load_installs(spool_dir):
+    found = {}
+    try:
+        for path in installs_dir(spool_dir).glob("*.json"):
+            try:
+                with open(path, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            state_dir = data.get("state_dir")
+            if state_dir:
+                found[path.stem] = {"state_dir": Path(state_dir), "last_seen": data.get("last_seen", 0)}
+    except Exception:
+        pass
+    return found
+
+
+def record_session(spool_dir, session_id, install, project, cwd):
+    if not valid_session_id(session_id):
+        return
+    try:
+        atomic_write_json(
+            sessions_dir(spool_dir) / f"{session_id}.json",
+            {
+                "install_id": install,
+                "project": project,
+                "cwd": str(cwd),
+                "last_notified": time.time(),
+            },
+        )
+    except Exception:
+        pass
+
+
+def load_sessions(spool_dir):
+    """Most recently notified first - `/mute` with no argument means the top one."""
+    found = []
+    try:
+        for path in sessions_dir(spool_dir).glob("*.json"):
+            try:
+                with open(path, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            data["session_id"] = path.stem
+            found.append(data)
+    except Exception:
+        pass
+    return sorted(found, key=lambda s: s.get("last_notified", 0), reverse=True)
+
+
+def plugin_version(script_dir):
+    try:
+        with open(Path(script_dir).resolve().parents[1] / ".claude-plugin" / "plugin.json") as f:
+            return str(json.load(f).get("version", "")) or "unknown"
+    except Exception:
+        return "unknown"
 
 
 def load_cursor(spool_dir):

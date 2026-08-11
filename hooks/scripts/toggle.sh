@@ -9,7 +9,8 @@ import tg_config
 USAGE = (
     "error: usage: /notifications [on|off] | /notifications on|off <permission|idle|finish> | "
     "/notifications delay <seconds> | /notifications delay off | /notifications buttons on|off | "
-    "/notifications mute | /notifications unmute | /notifications status"
+    "/notifications daemon install|uninstall|restart|status|log | /notifications mute | "
+    "/notifications unmute | /notifications status"
 )
 
 
@@ -46,6 +47,16 @@ def print_status(state_dir, config):
     ))
     print(f"buttons: {'on' if config.get('buttons', True) else 'off'}")
     print(f"session: {session_line}")
+    try:
+        import tg_service
+        info = tg_service.marker(state_dir)
+        if info:
+            print(f"daemon: {'running' if tg_service.is_loaded() else 'installed, not running'} "
+                  f"(v{info.get('version', '?')})")
+        else:
+            print("daemon: not installed")
+    except Exception:
+        pass
 
 
 def set_event(state_dir, config, event_type, value):
@@ -117,6 +128,24 @@ def main(argv):
 
     if len(argv) == 2 and argv[0] in ("on", "off"):
         set_event(state_dir, config, argv[1], argv[0] == "on")
+        return
+
+    if len(argv) == 2 and argv[0] == "daemon":
+        import tg_service
+        script_dir = Path(__file__).resolve().parent
+        action = argv[1]
+        if action == "install":
+            print(tg_service.install(state_dir, script_dir))
+        elif action == "uninstall":
+            print(tg_service.uninstall(state_dir))
+        elif action == "restart":
+            print(tg_service.restart(state_dir))
+        elif action == "status":
+            print(tg_service.status(state_dir, script_dir))
+        elif action == "log":
+            print(tg_service.tail_log(state_dir))
+        else:
+            usage_error()
         return
 
     if len(argv) == 2 and argv[0] == "buttons" and argv[1] in ("on", "off"):
