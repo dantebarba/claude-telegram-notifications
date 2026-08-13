@@ -10,6 +10,9 @@ CONFIG_FILENAME = "telegram-notifications.json"
 LEGACY_ENABLED_FILENAME = "telegram-notifications.enabled"
 PENDING_DIRNAME = "telegram-notifications-pending"
 MUTED_DIRNAME = "telegram-notifications-muted"
+# Deliberately not inside MUTED_DIRNAME: the 24h sweep that expires per-session
+# mutes must never lift a master mute you asked for on purpose.
+MUTE_ALL_FILENAME = "telegram-notifications-muted-all.json"
 
 # Shared by every install that talks to the same bot, so it cannot live under
 # CLAUDE_CONFIG_DIR: getUpdates offsets are global to a bot token.
@@ -53,6 +56,10 @@ def muted_dir(state_dir):
 
 def muted_file_path(state_dir, session_id):
     return muted_dir(state_dir) / f"{session_id}.json"
+
+
+def mute_all_path(state_dir):
+    return state_dir / MUTE_ALL_FILENAME
 
 
 def atomic_write_json(path, data):
@@ -168,6 +175,56 @@ def unmute_session(state_dir, session_id):
         return False
     except Exception:
         return False
+
+
+def is_muted_all(state_dir):
+    """Master mute: every conversation of this install stays silent until it is
+    lifted explicitly. Unlike a session mute it never expires on its own."""
+    return mute_all_path(state_dir).is_file()
+
+
+def mute_all(state_dir):
+    atomic_write_json(mute_all_path(state_dir), {"muted_at": time.time()})
+    return True
+
+
+def unmute_all(state_dir):
+    """Lifts the master mute and every individual session mute with it, so one
+    /unmute really does bring everything back."""
+    try:
+        mute_all_path(state_dir).unlink()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    try:
+        for path in muted_dir(state_dir).glob("*.json"):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    except Exception:
+        pass
+    return True
+
+
+def notifications_muted(state_dir, session_id):
+    """The one check the hook makes, so the master and per-session mutes cannot
+    drift apart between the immediate and the delayed send paths."""
+    return is_muted_all(state_dir) or is_session_muted(state_dir, session_id)
+
+
+def clear_pending(state_dir):
+    """Drops every notification still waiting out the delay, the way muting a
+    single session drops its own pending file."""
+    try:
+        for path in pending_dir(state_dir).glob("*.json"):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    except Exception:
+        pass
 
 
 def install_id(state_dir):

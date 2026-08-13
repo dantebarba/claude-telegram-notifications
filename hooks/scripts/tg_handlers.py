@@ -15,6 +15,7 @@ ACTION_UNMUTE = "u"
 ACTION_STATUS = "s"
 ACTION_TOGGLE = "t"
 ACTION_GLOBAL = "g"
+ACTION_MUTE_ALL = "a"
 
 SESSION_ACTIONS = (ACTION_MUTE, ACTION_UNMUTE, ACTION_STATUS)
 
@@ -22,8 +23,8 @@ PANEL_PREFIX = "Claude notifications"
 
 PALETTE = [
     {"command": "status", "description": "Settings panel: events, mute, enable/disable"},
-    {"command": "mute", "description": "Silence the last conversation that pinged you"},
-    {"command": "unmute", "description": "Unmute a conversation"},
+    {"command": "mute", "description": "Silence every conversation"},
+    {"command": "unmute", "description": "Bring all conversations back"},
 ]
 
 
@@ -69,7 +70,7 @@ def parse_callback_data(raw):
     elif action == ACTION_TOGGLE:
         if arg not in tg_config.EVENT_TYPES:
             return None
-    elif action == ACTION_GLOBAL:
+    elif action in (ACTION_GLOBAL, ACTION_MUTE_ALL):
         if arg not in ("0", "1"):
             return None
     else:
@@ -100,11 +101,17 @@ def status_text(state_dir, config, session_id):
     """Short enough for an answerCallbackQuery alert (200 char cap)."""
     events = tg_config.normalize_events(config.get("events"))
     delay = config.get("delay_seconds")
+    if tg_config.is_muted_all(state_dir):
+        muted = "all conversations"
+    elif tg_config.is_session_muted(state_dir, session_id):
+        muted = "this session"
+    else:
+        muted = "no"
     return "\n".join([
         f"global: {'on' if config.get('enabled') else 'off'}",
         f"delay: {f'{delay}s' if delay else 'off (immediate)'}",
         " ".join(f"{e}={'on' if events[e] else 'off'}" for e in tg_config.EVENT_TYPES),
-        f"this session: {'muted' if tg_config.is_session_muted(state_dir, session_id) else 'active'}",
+        f"muted: {muted}",
     ])
 
 
@@ -118,11 +125,13 @@ def build_panel(ctx, install, state_dir):
     session = recent[0] if recent else None
     session_id = session.get("session_id") if session else None
     muted = tg_config.is_session_muted(state_dir, session_id) if session_id else False
+    muted_all = tg_config.is_muted_all(state_dir)
 
     lines = [
         f"{PANEL_PREFIX} — {Path(state_dir).name}",
         f"global: {'on' if config.get('enabled') else 'off'}    "
-        f"delay: {f'{delay}s' if delay else 'immediate'}",
+        f"delay: {f'{delay}s' if delay else 'immediate'}"
+        f"{'    muted: all' if muted_all else ''}",
     ]
     if session:
         lines.append(
@@ -139,13 +148,12 @@ def build_panel(ctx, install, state_dir):
         }
         for event in tg_config.EVENT_TYPES
     ]]
-    if session_id:
-        rows.append([{
-            "text": "🔔 Unmute last session" if muted else "🔕 Mute last session",
-            "callback_data": callback_data(
-                ACTION_UNMUTE if muted else ACTION_MUTE, install, session_id
-            ),
-        }])
+    # Master mute lives on the panel; a single conversation is silenced from the
+    # buttons on its own notification, which name the exact session.
+    rows.append([{
+        "text": "🔔 Unmute all" if muted_all else "🔕 Mute all",
+        "callback_data": callback_data(ACTION_MUTE_ALL, install, "0" if muted_all else "1"),
+    }])
     rows.append([{
         "text": "⏸ Disable all" if config.get("enabled") else "▶️ Enable all",
         "callback_data": callback_data(ACTION_GLOBAL, install, "0" if config.get("enabled") else "1"),
@@ -221,6 +229,20 @@ def handle_callback(ctx, callback):
         _refresh_message(ctx, install, state_dir, message, force_panel=True)
         return
 
+    if action == ACTION_MUTE_ALL:
+        mute = arg == "1"
+        if mute:
+            tg_config.mute_all(state_dir)
+            tg_config.clear_pending(state_dir)
+        else:
+            tg_config.unmute_all(state_dir)
+        tg_api.answer_callback_query(
+            ctx.bot_token, query_id,
+            "🔕 All conversations muted" if mute else "🔔 All conversations unmuted",
+        )
+        _refresh_message(ctx, install, state_dir, message, force_panel=True)
+        return
+
     muted = action == ACTION_MUTE
     if muted:
         tg_config.mute_session(state_dir, arg)
@@ -241,13 +263,6 @@ def handle_callback(ctx, callback):
 
 # ------------------------------------------------------------------ commands
 
-def resolve_sessions(ctx, prefix):
-    sessions = tg_config.load_sessions(ctx.spool)
-    if not prefix:
-        return sessions[:1]
-    return [s for s in sessions if s["session_id"].startswith(prefix)]
-
-
 def send_panels(ctx):
     installs = ctx.installs()
     if not installs:
@@ -262,9 +277,7 @@ def handle_message(ctx, message):
     text = (message.get("text") or "").strip()
     if not text.startswith("/"):
         return
-    parts = text.split()
-    command = parts[0].lstrip("/").split("@")[0].lower()
-    argument = parts[1] if len(parts) > 1 else ""
+    command = text.split()[0].lstrip("/").split("@")[0].lower()
 
     if command == "status":
         send_panels(ctx)
@@ -273,46 +286,25 @@ def handle_message(ctx, message):
     if command not in ("mute", "unmute"):
         return
 
-    matches = resolve_sessions(ctx, argument)
-    if not matches:
-        tg_api.send_message(
-            ctx.bot_token, ctx.chat_id,
-            f"No session matching '{argument}'." if argument else "No sessions have notified yet.",
-        )
-        return
-    if len(matches) > 1:
-        listing = "\n".join(
-            f"  {s['session_id'][:8]}  {s.get('project', '?')}" for s in matches[:10]
-        )
-        tg_api.send_message(
-            ctx.bot_token, ctx.chat_id,
-            f"'{argument}' matches {len(matches)} sessions - be more specific:\n{listing}",
-        )
+    # Typed here, mute is a master switch over every install this bot knows: the
+    # inline buttons on a notification are how you silence one conversation.
+    installs = ctx.installs()
+    if not installs:
+        tg_api.send_message(ctx.bot_token, ctx.chat_id, "No Claude installs have notified yet.")
         return
 
-    session = matches[0]
-    state_dir = ctx.state_dir_for(session.get("install_id"))
-    if state_dir is None:
-        tg_api.send_message(ctx.bot_token, ctx.chat_id, "That session's install is no longer known.")
-        return
+    for record in installs.values():
+        state_dir = record["state_dir"]
+        if command == "mute":
+            tg_config.mute_all(state_dir)
+            tg_config.clear_pending(state_dir)
+        else:
+            tg_config.unmute_all(state_dir)
 
-    short = session["session_id"][:8]
-    if command == "mute":
-        tg_config.mute_session(state_dir, session["session_id"])
-        try:
-            tg_config.pending_file_path(state_dir, session["session_id"]).unlink()
-        except FileNotFoundError:
-            pass
-        except Exception:
-            pass
-        tg_api.send_message(
-            ctx.bot_token, ctx.chat_id, f"🔕 Muted {short} ({session.get('project', '?')})"
-        )
-    else:
-        tg_config.unmute_session(state_dir, session["session_id"])
-        tg_api.send_message(
-            ctx.bot_token, ctx.chat_id, f"🔔 Unmuted {short} ({session.get('project', '?')})"
-        )
+    tg_api.send_message(
+        ctx.bot_token, ctx.chat_id,
+        "🔕 Muted all conversations" if command == "mute" else "🔔 Unmuted all conversations",
+    )
 
 
 def handle_update(ctx, update):

@@ -31,7 +31,10 @@ def print_status(state_dir, config):
     events = tg_config.normalize_events(config.get("events"))
     session_id = current_session_id()
 
-    if not session_id:
+    if tg_config.is_muted_all(state_dir):
+        # Would otherwise read "active" while nothing can get through.
+        session_line = "muted (master mute is on - /unmute in Telegram)"
+    elif not session_id:
         session_line = "unknown (no session id)"
     elif tg_config.is_session_muted(state_dir, session_id):
         session_line = "muted"

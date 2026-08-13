@@ -444,7 +444,7 @@ def main_hook():
 
     sync_callbacks(state_dir, config)
 
-    if tg_config.is_session_muted(state_dir, session_id):
+    if tg_config.notifications_muted(state_dir, session_id):
         return
 
     if hook_event == "Stop" or notification_type == "idle_prompt":
@@ -507,7 +507,7 @@ def main_flush(session_id, generation, delay_seconds):
 
         sync_callbacks(state_dir, config)
 
-        if tg_config.is_session_muted(state_dir, session_id):
+        if tg_config.notifications_muted(state_dir, session_id):
             return
 
         if hook_event == "Stop" or notification_type == "idle_prompt":

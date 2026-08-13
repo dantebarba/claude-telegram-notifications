@@ -76,7 +76,7 @@ Each of the three event types can be turned off on its own, so you can keep the 
 /notifications on permission    # keep approval prompts
 ```
 
-Turning a type on also turns the global switch on, since otherwise it would have no effect. The global switch wins over the per-type flags, which in turn win over a per-conversation mute.
+Turning a type on also turns the global switch on, since otherwise it would have no effect. The global switch wins over the per-type flags, which in turn win over a mute — whether that is the master mute or a per-conversation one.
 
 ### Muting a single conversation
 
@@ -86,6 +86,8 @@ Turning a type on also turns the global switch on, since otherwise it would have
 ```
 
 Mute is scoped to the current session id, leaves your global settings untouched, and also drops any notification already waiting out the delay for that session. Mute state lives in `$CLAUDE_CONFIG_DIR/telegram-notifications-muted/`, one file per session, cleaned up automatically after 24 hours — a session running longer than that unmutes itself.
+
+The master mute is separate: `/mute` in Telegram (or **Mute all** on the panel) writes `$CLAUDE_CONFIG_DIR/telegram-notifications-muted-all.json` and silences every conversation of that install until you unmute. It is never swept by the 24-hour cleanup, and `/unmute` clears it together with the per-session mutes.
 
 ### Muting from Telegram
 
@@ -136,22 +138,21 @@ global: on    delay: 15s
 last session: a1b2c3d4 (my-app)
 
 [ ✅ finish ] [ ✅ idle ] [ ✅ permission ]
-[ 🔕 Mute last session ]
+[ 🔕 Mute all ]
 [ ⏸ Disable all ]
 ```
 
-Every button edits the message in place, so the panel always shows current truth. Tapping an event type turns that notification kind on or off exactly like `/notifications off finish` would on the machine.
+Every button edits the message in place, so the panel always shows current truth. Tapping an event type turns that notification kind on or off exactly like `/notifications off finish` would on the machine. **Mute all** is the master mute for that install; **Unmute all** lifts it along with any individual conversation mutes.
 
 ### Typed commands
 
 ```
-/mute              silence the conversation that pinged you most recently
-/mute a1b2c3d4     silence that one, by the short id shown in every notification
-/unmute [id]
-/status            the panel above
+/mute      master mute: silence every conversation, on every install
+/unmute    bring them all back
+/status    the panel above
 ```
 
-An ambiguous id prefix lists the candidates rather than guessing.
+`/mute` is deliberately a master switch — the conversation you happened to be pinged by last is rarely the only one you want quiet. It stays on until you `/unmute` (it never expires by itself), and to silence just one conversation you tap **🔕 Mute** on its own notification.
 
 ### Notes
 
